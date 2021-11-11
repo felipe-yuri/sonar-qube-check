@@ -1,0 +1,257 @@
+variables:
+  SONAR_PROJECT_FILE: "sonar-project.properties"
+  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar" # Define o local do cache
+  GIT_DEPTH: "0" # Define profundidade do shallow clone. Valor 0 ou vazio desabilita o shallow clone.
+  SONAR_ENCODING: "ISO-8859-1"
+  HOST: "https://git.sankhya.com.br/api/v4/projects"
+  MR_CHANGES: "${HOST}/${CI_MERGE_REQUEST_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/changes"
+  WEBHOOK_WORKFLOW: "https://chat.googleapis.com/v1/spaces/AAAAMBL6-WM/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=2wm7MlxxoziFQ4kyg8bYfe1NzBBfOmh1SZEcdIIjJ54%3D"
+  WEBHOOK_DEVOPS: "https://chat.googleapis.com/v1/spaces/AAAA55kBrUc/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=M6_FsZDjPq38RiMjYyaxI2e1Nbv8XlSsSuj_FQP1Uxw%3D"
+  WEBHOOK_QA: "https://chat.googleapis.com/v1/spaces/AAAAum564_M/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=GP5DYjWyEh_xq4tvoyevZGjbryamTVIV14CAZq7cXVY%3D"
+  USERS_WORKFLOW: "/(leonardo.mendes|andreza.carvalho|luciane.soares|everson.borges|richard.frezza)/"
+  USERS_QA: "/(thaise.oliveira|cristine|caroline.rosa|dianne.silva|pedro.leandro)/"
+  # COMMONS_FX_ID: "133"
+  # DASHBOARD_FX_ID: "220"
+  # EXTENSOES_FX_ID: "225"
+  # SANDB_FX_ID: "216"
+  # CONTROLS_ID: "219"
+  # GOOGLE_FX_ID: "217"
+  # SANUTIL_FX_ID: "215"
+  # SASCOM_ID: "593"
+  # SANNFE_ID: "486"
+  # SANNFE_FX_ID: "487"
+  PROJECT_LIST: "133 220 225 216 219 217 215 593 486 487" #ID dos projetos
+  # PROJECT_LIST: "$COMMONS_FX_ID $DASHBOARD_FX_ID $EXTENSOES_FX_ID $SANDB_FX_ID $CONTROLS_ID $GOOGLE_FX_ID $SANUTIL_FX_ID $SASCOM_ID $SANNFE_ID $SANNFE_FX_ID" 
+
+stages:
+  - bypass
+  - sonarqube
+  - sonar-notify-positive
+  - sonar-notify-negative
+  - flex-merge
+
+bypass-sonar:
+  tags:
+    - charged-runner
+  stage: bypass
+  only: 
+    - merge_requests
+  except:
+      variables:
+        - $GITLAB_USER_LOGIN =~ $USERS_WORKFLOW && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /(\d\.\d{1,2}-DEV)/
+        - $GITLAB_USER_LOGIN =~ $USERS_QA && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /(?:^(\d\.\d{1,2})(?:-(RC|HOMOLOG))?)/
+  script: echo "Bypass sonar!"
+
+sonarqube-check:
+  tags:
+    - charged-runner
+  image: sonarsource/sonar-scanner-cli:latest
+  stage: sonarqube
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  script:
+    - apk add curl && apk add jq
+    - 'curl --header "PRIVATE-TOKEN: $GITLAB_API_TOLKEN" $MR_CHANGES > response.json'
+    - COUNT=$(jq .changes response.json | jq length)
+    - COUNT=$(( COUNT - 1))
+    - SOURCES=$(
+        for item in $(seq $(eval echo 0 $COUNT)); do 
+          if [[ "$(jq .changes[$item].deleted_file response.json)" = false && $(expr match "$(jq .changes[$item].new_path response.json)" '.*\.(java|xml)') != 0 ]]; then 
+            jq .changes[$item].new_path response.json ; 
+          fi 
+        done
+      ) 
+    - if [[ -z $SOURCES ]]; then 
+        echo "Nenhum arquivo para ser validado no sonar.";
+        exit 0; 
+      fi
+    - SOURCES=$(echo $SOURCES |sed 's/ /,/g'|sed 's/"//g')
+    - "sonar-scanner \
+      -Dsonar.host.url=${SONAR_HOST_URL} \
+      -Dsonar.login=${SONAR_TOLKEN} \
+      -Dproject.settings=${SONAR_PROJECT_FILE} \
+      -Dsonar.sources=$SOURCES \
+      -Dsonar.branch.name=${CI_BRANCH_NAME} \
+      -Dsonar.sourceEncoding=${SONAR_ENCODING} \
+      -Dsonar.qualitygate.wait=true "
+
+  only:
+    refs:
+      - merge_requests 
+    variables:
+      - $GITLAB_USER_LOGIN =~ $USERS_WORKFLOW && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /(\d\.\d{1,2}-DEV)/
+
+  except:
+    variables:
+      - $CI_COMMIT_REF_NAME =~ /^(cherry-pick|mass-update)-.*/
+
+sonarqube-notify-positive:
+  tags:
+    - charged-runner
+  stage: sonar-notify-positive
+  image: sonarsource/sonar-scanner-cli:latest
+  dependencies:
+    - sonarqube-check
+  script:
+    - apk add curl
+    - apk add jq
+    - 'curl --header "PRIVATE-TOKEN: $GITLAB_API_TOLKEN" $MR_CHANGES > response.json'
+    - MR_TITLE=$(jq .title response.json)
+    - MR_AUTHOR=$(jq .author.name response.json)
+    - MR_STATUS="Validação sonar aprovada! Liberado para merge."
+    - MR_LINK=$(jq .web_url response.json)
+    - SONAR_LINK="http://sonar.sankhya.com.br:9000/dashboard?id=$CI_PROJECT_NAME"
+    - "curl -X POST -H 'Content-Type: application/json' \"$WEBHOOK_WORKFLOW\" -d \"{'text': '\n *Merge Request (MR):* $MR_TITLE\n *Autor:* $MR_AUTHOR\n *Status:* $MR_STATUS\n *Link do MR:* $MR_LINK\n *Link Sonar:* $SONAR_LINK\n'}\""
+  when: on_success
+  allow_failure: true
+  only:
+    refs:
+      - merge_requests 
+    variables:
+      - $GITLAB_USER_LOGIN =~ $USERS_WORKFLOW && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /(\d\.\d{1,2}-DEV)/
+
+  except:
+    variables:
+      - $CI_COMMIT_REF_NAME =~ /^(cherry-pick|mass-update)-.*/
+
+sonarqube-notify-negative:
+  tags:
+    - charged-runner
+  stage: sonar-notify-negative
+  image: sonarsource/sonar-scanner-cli:latest
+  dependencies:
+  - sonarqube-check
+  script:
+    - apk add curl
+    - apk add jq
+    - 'curl --header "PRIVATE-TOKEN: $GITLAB_API_TOLKEN" $MR_CHANGES > response.json'
+    - MR_TITLE=$(jq .title response.json)
+    - MR_AUTHOR=$(jq .author.name response.json)
+    - MR_STATUS="Validação sonar reprovada! Bloqueado para merge."
+    - MR_LINK=$(jq .web_url response.json)
+    - SONAR_LINK="http://sonar.sankhya.com.br:9000/dashboard?id=$CI_PROJECT_NAME"
+    - "curl -X POST -H 'Content-Type: application/json' \"$WEBHOOK_WORKFLOW\" -d \"{'text': '\n *Merge Request (MR):* $MR_TITLE\n *Autor:* $MR_AUTHOR\n *Status:* $MR_STATUS\n *Link do MR:* $MR_LINK\n *Link Sonar:* $SONAR_LINK\n'}\""
+  when: on_failure
+  allow_failure: true
+  only:
+    refs:
+      - merge_requests 
+    variables:
+      - $GITLAB_USER_LOGIN =~ $USERS_WORKFLOW && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /(\d\.\d{1,2}-DEV)/
+
+  except:
+    variables:
+      - $CI_COMMIT_REF_NAME =~ /^(cherry-pick|mass-update)-.*/
+
+flex-merge:
+  tags:
+    - charged-runner
+  stage: flex-merge
+  image: sonarsource/sonar-scanner-cli:latest
+  script:
+    - apk add curl;
+    - apk add jq;
+    - 'for PROJECT_ID in $PROJECT_LIST; do
+        
+        getMergeRequest() {
+          while :; do
+            LISTMR=$(curl --silent "${HOST}/${PROJECT_ID}/merge_requests?state=opened&source_branch=${CI_COMMIT_REF_NAME}&target_branch=${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}" 
+              --header "PRIVATE-TOKEN: ${GITLAB_API_TOLKEN}");
+            
+            if [[ "$LISTMR" != [] ]]; then
+              echo $LISTMR > response.json;
+              jq .[0] response.json > responseAux.json;
+              jq . responseAux.json > response.json;
+              MR_STATUS=$(jq .merge_status response.json | sed -e "s/\"//g");
+
+              if [[ "$MR_STATUS" != null && "$MR_STATUS" != "" && "$MR_STATUS" != "checking" && "$MR_STATUS" != "cannot_be_merged_recheck" ]]; then
+                break;
+              fi
+            else
+              break;
+            fi
+          done
+
+          if [ $? -ne 0 ]; then
+            echo -e "\nErro ao tentar pegar o merge request da branch ${CI_COMMIT_REF_NAME} para ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}. Entre em contato com o devops\n";
+            return 1;
+          fi
+        }
+
+        getMergeRequest;
+
+        openMerge() {
+          if [[ "$LISTMR" == [] ]]; then
+
+            BODY="{
+              \"id\" : \"$PROJECT_ID\", 
+              \"source_branch\" : \"$CI_COMMIT_REF_NAME\",
+              \"target_branch\" : \"$CI_MERGE_REQUEST_TARGET_BRANCH_NAME\",
+              \"remove_source_branch\" : false,
+              \"title\" : \"$CI_COMMIT_TITLE\",
+              \"assignee_id\" : \"$GITLAB_USER_ID\"
+            }";
+          
+            echo -e "\n\n Request Body: $BODY";
+
+            curl --silent -X POST "${HOST}/${PROJECT_ID}/merge_requests" 
+              --header "Content-Type: application/json" 
+              --header "PRIVATE-TOKEN: $GITLAB_API_TOLKEN" 
+              --data "${BODY}" > response.json;
+
+            echo -e "\nNovo merge request aberto por $GITLAB_USER_LOGIN para a branch ${CI_COMMIT_REF_NAME}";
+            
+          else
+            echo -e "\nJá existe um merge request aberto por $GITLAB_USER_LOGIN para a branch ${CI_COMMIT_REF_NAME}.";
+          fi
+
+          if [ $? -ne 0 ]; then
+            echo -e "\nErro ao tentar abrir o merge request para a branch ${CI_COMMIT_REF_NAME}. Entre em contato com o devops\n";
+            return 1;
+          fi
+        }
+        
+        openMerge;
+
+        acceptMerge() {
+          getMergeRequest;
+
+          MR_IID=$(jq .iid response.json);
+          echo -e "Merge Request IID: $MR_IID";
+          MR_CONFLICTS=$(jq .has_conflicts response.json);
+          echo -e "Merge Request Conflicts: $MR_CONFLICTS";
+          MR_URL=$(jq .web_url response.json | sed -e "s/\"//g");
+          echo -e "Merge Request URL: $MR_URL";
+          echo -e "Merge Request Status: $MR_STATUS";
+
+
+          if [[ $MR_CONFLICTS == false && $MR_STATUS == "can_be_merged" ]]; then
+            curl --silent -X PUT "${HOST}/${PROJECT_ID}/merge_requests/${MR_IID}/merge" 
+              --header "Content-Type: application/json"
+              --header "PRIVATE-TOKEN: $GITLAB_API_TOLKEN" > /dev/null; 
+          else
+            if [[ "$MR_CONFLICTS" == true ]]; then
+              echo -e "\nO MR: $MR_URL possui conflitos. Resolva para continuar.";
+              curl --silent -X POST --header "Content-Type: application/json" "$WEBHOOK_QA" 
+                --data "{\"text\": \"\nO MR: $MR_URL possui conflitos. Resolva para continuar.\"}" > /dev/null;
+            fi
+          fi
+
+          if [ $? -ne 0 ]; then
+            echo -e "\nErro ao tentar aceitar o merge request: $MR_URL\n";
+            return 1;
+          fi
+        }
+
+        acceptMerge;
+        
+      done'
+
+  only:
+    refs:
+      - merge_requests 
+    variables:
+      - $GITLAB_USER_LOGIN =~ $USERS_QA && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /(?:^(\d\.\d{1,2})(?:-(RC|HOMOLOG))?)/ && $CI_COMMIT_REF_NAME =~ /(?:^(\d\.\d{1,2})(?:-(DEV|RC|HOMOLOG))?)/
+
