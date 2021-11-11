@@ -3,7 +3,7 @@ variables:
   SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar" # Define o local do cache
   GIT_DEPTH: "0" # Define profundidade do shallow clone. Valor 0 ou vazio desabilita o shallow clone.
   SONAR_ENCODING: "ISO-8859-1"
-  HOST: "https://git.sankhya.com.br/api/v4/projects"
+  HOST: "SEU_REPOSITORIO_AQUI"
   MR_CHANGES: "${HOST}/${CI_MERGE_REQUEST_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/changes"
   WEBHOOK_WORKFLOW: "https://chat.googleapis.com/v1/spaces/AAAAMBL6-WM/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=2wm7MlxxoziFQ4kyg8bYfe1NzBBfOmh1SZEcdIIjJ54%3D"
   WEBHOOK_DEVOPS: "https://chat.googleapis.com/v1/spaces/AAAA55kBrUc/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=M6_FsZDjPq38RiMjYyaxI2e1Nbv8XlSsSuj_FQP1Uxw%3D"
