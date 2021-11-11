@@ -8,7 +8,7 @@
 
 **Problem**: Lack of code quality and security.
 
-**Solution**: It is necessary to use the qube sonar tool to evaluate the code of any company and stop any type of insecurity and low code quality. This project runs the sonar on all the project code, if the sonar has passed or failed status, a webhook is sent to the team's google chat.
+**Solution**: It is necessary to use the sonar qube tool to evaluate the code of any company and stop any type of insecurity and low code quality. This project runs the sonar on all the project code, if the sonar has passed or failed status, a webhook is sent to the team's google chat.
 
 ## ✒️ Autor
 > **Felipe Yuri Silva Bonfillioli**  - [Email](felipys@gmail.com)
